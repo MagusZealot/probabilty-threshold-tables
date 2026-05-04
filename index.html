@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Game Data Analysis — Probability threshold dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --border: #2d3a4f;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #4da3ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    header p {
+      margin: 0.35rem 0 0;
+      font-size: 0.875rem;
+      color: var(--muted);
+      max-width: 52rem;
+    }
+    main {
+      padding: 1.25rem 1.5rem 2.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .upload-zone {
+      position: relative;
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 1.75rem;
+      text-align: center;
+      background: var(--surface);
+      margin-bottom: 1.5rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--accent);
+      background: #1e2838;
+    }
+    /* Do not use display:none on file input — label activation / picker breaks in some browsers. */
+    .upload-zone .file-input-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      border: 0;
+      white-space: nowrap;
+    }
+    .upload-zone strong { color: var(--accent); }
+    .meta {
+      font-size: 0.8125rem;
+      color: var(--muted);
+      margin-bottom: 1.25rem;
+    }
+    .meta span { margin-right: 1.25rem; }
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1rem 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .chart-card h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .chart-card .chart-date-range {
+      margin: -0.35rem 0 0.65rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+    .chart-wrap {
+      position: relative;
+      height: 320px;
+    }
+    .chart-wrap.tall { height: 400px; }
+    .note {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+      padding-bottom: 0.75rem;
+    }
+    .hidden { display: none !important; }
+    #status { color: var(--muted); font-size: 0.875rem; margin-bottom: 1rem; }
+    #status.error { color: #f87171; }
+    .table-scroll {
+      overflow-x: auto;
+      margin: 0.5rem 0 1rem;
+      max-height: 280px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    table.data {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+    }
+    table.data th, table.data td {
+      padding: 0.4rem 0.65rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    table.data th {
+      position: sticky;
+      top: 0;
+      background: #243044;
+      color: var(--text);
+      font-weight: 600;
+    }
+    table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    table.data tbody tr:hover { background: rgba(77, 163, 255, 0.06); }
+    h3.table-title {
+      margin: 0.75rem 0 0.35rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .date-filter {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1.25rem;
+      padding: 0.9rem 1rem;
+      margin-bottom: 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .date-filter-label {
+      font-weight: 600;
+      font-size: 0.875rem;
+      margin-right: 0.25rem;
+    }
+    .date-filter label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+    .date-filter input[type="date"] {
+      padding: 0.35rem 0.5rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    .date-filter button {
+      padding: 0.4rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #243044;
+      color: var(--text);
+      font: inherit;
+      font-size: 0.8125rem;
+      cursor: pointer;
+    }
+    .date-filter button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .date-hint {
+      width: 100%;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin: 0;
+    }
+    .date-filter-status { font-size: 0.8125rem; color: var(--muted); }
+    .date-filter-status.error { color: #f87171; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Game data — probability threshold exceeded</h1>
+    <p>
+      Upload the game <strong>csv file</strong> to chart how often <strong>actual probability</strong> exceeds the <strong>threshold</strong> (per row) by game type, betting area, and billing date.
+    </p>
+  </header>
+  <main>
+    <div
+      class="upload-zone"
+      id="dropzone"
+      role="button"
+      tabindex="0"
+      aria-label="Choose or drop a CSV file"
+    >
+      <input type="file" id="file-input" class="file-input-hidden" accept=".csv,text/csv" />
+      <div>Drop your CSV here or <strong>browse</strong></div>
+      <div class="meta" style="margin-top: 0.5rem;">Required columns: billing_date, game_type, bet_place, actual_probability, threshold</div>
+    </div>
+    <div id="status"></div>
+    <div id="dashboard" class="hidden">
+      <div class="meta" id="file-meta"></div>
+
+      <div class="date-filter" id="date-filter-panel">
+        <span class="date-filter-label">Billing date range</span>
+        <label for="date-from">From <input type="date" id="date-from" autocomplete="off" /></label>
+        <label for="date-to">To <input type="date" id="date-to" autocomplete="off" /></label>
+        <button type="button" id="date-reset">Use full range in file</button>
+        <span id="date-filter-status" class="date-filter-status" aria-live="polite"></span>
+        <p class="date-hint" id="date-range-available"></p>
+      </div>
+
+      <section class="chart-card">
+        <h2>Number of times threshold exceeded by game type</h2>
+        <p class="chart-date-range" id="chart-range-game-type"></p>
+        <div class="chart-wrap"><canvas id="chart-game-type"></canvas></div>
+        <p class="note" id="rule-note"></p>
+        <h3 class="table-title">Underlying counts</h3>
+        <div class="table-scroll"><table class="data" id="table-game-type"><thead></thead><tbody></tbody></table></div>
+      </section>
+
+      <section class="chart-card">
+        <h2>Number of times threshold exceeded by betting area</h2>
+        <p class="chart-date-range" id="chart-range-bet-area"></p>
+        <p class="note" style="margin-bottom: 0.5rem;">Betting area uses column <code>bet_place</code> from the CSV.</p>
+        <div class="chart-wrap tall"><canvas id="chart-bet-area"></canvas></div>
+        <h3 class="table-title">Underlying counts</h3>
+        <div class="table-scroll"><table class="data" id="table-bet-area"><thead></thead><tbody></tbody></table></div>
+      </section>
+
+      <section class="chart-card">
+        <h2>Number of times threshold exceeded by billing date (stacked by game type)</h2>
+        <p class="chart-date-range" id="chart-range-by-date"></p>
+        <div class="chart-wrap tall"><canvas id="chart-by-date"></canvas></div>
+        <h3 class="table-title">Counts by billing date and game type</h3>
+        <div class="table-scroll"><table class="data" id="table-by-date"><thead></thead><tbody></tbody></table></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    function parsePct(v) {
+      if (v == null || v === "") return null;
+      const s = String(v).trim().replace(/%/g, "");
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    /** Exceeded when actual probability (%) is strictly greater than threshold (%). */
+    function isThresholdExceeded(row) {
+      const actual = parsePct(row.actual_probability);
+      const threshold = parsePct(row.threshold);
+      if (actual === null || threshold === null) return false;
+      return actual > threshold;
+    }
+
+    const chartDefaults = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#c8d4e6" } },
+        tooltip: {
+          backgroundColor: "rgba(15, 20, 25, 0.92)",
+          titleColor: "#e8eef7",
+          bodyColor: "#c8d4e6",
+          borderColor: "#2d3a4f",
+          borderWidth: 1
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: "#8b9cb3", maxRotation: 45, minRotation: 0 },
+          grid: { color: "rgba(45, 58, 79, 0.5)" }
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: "#8b9cb3", precision: 0 },
+          grid: { color: "rgba(45, 58, 79, 0.5)" },
+          title: {
+            display: true,
+            text: "Count",
+            color: "#8b9cb3"
+          }
+        }
+      }
+    };
+
+    let charts = [];
+    let loadedRows = [];
+    let fileDateMin = null;
+    let fileDateMax = null;
+
+    function parseBillingDateKey(s) {
+      const t = (s || "").trim();
+      return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
+    }
+
+    function getBillingDateExtent(rows) {
+      const keys = rows.map((r) => parseBillingDateKey(r.billing_date)).filter(Boolean);
+      if (!keys.length) return { min: null, max: null };
+      keys.sort();
+      return { min: keys[0], max: keys[keys.length - 1] };
+    }
+
+    /**
+     * Keeps rows whose billing_date is YYYY-MM-DD within [fromStr, toStr] inclusive.
+     * Empty from/to means no bound on that side. Both empty = all rows.
+     */
+    function filterRowsByDateRange(rows, fromStr, toStr) {
+      const hasFrom = !!(fromStr && String(fromStr).trim());
+      const hasTo = !!(toStr && String(toStr).trim());
+      if (!hasFrom && !hasTo) return rows.slice();
+      return rows.filter((r) => {
+        const d = parseBillingDateKey(r.billing_date);
+        if (!d) return false;
+        if (hasFrom && d < fromStr) return false;
+        if (hasTo && d > toStr) return false;
+        return true;
+      });
+    }
+
+    function destroyCharts() {
+      charts.forEach((c) => c.destroy());
+      charts = [];
+    }
+
+    function hsl(i, total) {
+      const h = Math.round((360 * i) / Math.max(total, 1)) % 360;
+      return `hsla(${h}, 65%, 55%, 0.85)`;
+    }
+
+    /** Human-readable billing date filter line for each chart (matches date picker + full-file bounds). */
+    function getChartDateRangeCaption() {
+      const fromEl = document.getElementById("date-from");
+      const toEl = document.getElementById("date-to");
+      const fromStr = fromEl && fromEl.value ? String(fromEl.value).trim() : "";
+      const toStr = toEl && toEl.value ? String(toEl.value).trim() : "";
+      const hasFrom = !!fromStr;
+      const hasTo = !!toStr;
+
+      if (hasFrom && hasTo) {
+        return fromStr === toStr
+          ? `Billing date: ${fromStr}`
+          : `Billing dates: ${fromStr} → ${toStr}`;
+      }
+      if (hasFrom) return `Billing dates: from ${fromStr} onward`;
+      if (hasTo) return `Billing dates: through ${toStr}`;
+      if (fileDateMin && fileDateMax) {
+        return fileDateMin === fileDateMax
+          ? `Billing date (full file): ${fileDateMin}`
+          : `Billing dates (full file): ${fileDateMin} → ${fileDateMax}`;
+      }
+      return "Billing dates: all rows (no YYYY-MM-DD span detected)";
+    }
+
+    function updateChartDateRangeCaptions() {
+      const text = getChartDateRangeCaption();
+      ["chart-range-game-type", "chart-range-bet-area", "chart-range-by-date"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+      });
+    }
+
+    function processRows(rows, totalRowsInFile) {
+      const exceeded = rows.filter(isThresholdExceeded);
+      const byGame = {};
+      const byBet = {};
+      const byDateGame = {};
+
+      for (const r of exceeded) {
+        const g = (r.game_type || "").trim() || "(empty)";
+        const b = (r.bet_place || "").trim() || "(empty)";
+        const d = (r.billing_date || "").trim() || "(no date)";
+
+        byGame[g] = (byGame[g] || 0) + 1;
+        byBet[b] = (byBet[b] || 0) + 1;
+        if (!byDateGame[d]) byDateGame[d] = {};
+        byDateGame[d][g] = (byDateGame[d][g] || 0) + 1;
+      }
+
+      const nAll =
+        totalRowsInFile !== undefined && totalRowsInFile !== null
+          ? totalRowsInFile
+          : rows.length;
+
+      return {
+        exceeded,
+        byGame,
+        byBet,
+        byDateGame,
+        totalRows: rows.length,
+        totalRowsInFile: nAll
+      };
+    }
+
+    function buildCharts(result) {
+      destroyCharts();
+      const { byGame, byBet, byDateGame, exceeded, totalRows } = result;
+
+      updateChartDateRangeCaptions();
+
+      document.getElementById("rule-note").textContent =
+        "Rule: a row counts as exceeded when Actual probability > Threshold (both in %). Rows with missing actual probability or threshold are excluded. All counts use rows whose billing date is in the selected range (YYYY-MM-DD).";
+
+      const gameLabels = Object.keys(byGame).sort((a, b) => byGame[b] - byGame[a]);
+      const gameData = gameLabels.map((k) => byGame[k]);
+      const betLabels = Object.keys(byBet).sort((a, b) => byBet[b] - byBet[a]);
+      const betData = betLabels.map((k) => byBet[k]);
+      const dates = Object.keys(byDateGame).sort();
+      const gameSet = new Set();
+      dates.forEach((d) => {
+        Object.keys(byDateGame[d]).forEach((g) => gameSet.add(g));
+      });
+      const games = Array.from(gameSet).sort();
+
+      const inFile = result.totalRowsInFile;
+      document.getElementById("file-meta").innerHTML =
+        `<span><strong>${inFile}</strong> rows in file</span>` +
+        `<span><strong>${totalRows}</strong> rows in selected date range</span>` +
+        `<span><strong>${exceeded.length}</strong> probability threshold exceedances in range</span>`;
+
+      /* Tables first: Chart.js can throw on empty labels/datasets and would skip table updates. */
+      fillTwoColTable("table-game-type", "Game type", "Times exceeded", gameLabels, gameData);
+      fillTwoColTable("table-bet-area", "Betting area (bet_place)", "Times exceeded", betLabels, betData);
+
+      const dateTableHead = document.querySelector("#table-by-date thead");
+      const dateTableBody = document.querySelector("#table-by-date tbody");
+      dateTableHead.innerHTML = "";
+      dateTableBody.innerHTML = "";
+      if (games.length === 0) {
+        const headerRow = document.createElement("tr");
+        headerRow.innerHTML = `<th>Billing date</th><th class="num">Total</th>`;
+        dateTableHead.appendChild(headerRow);
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="2" class="num">No exceedances in this range</td>`;
+        dateTableBody.appendChild(tr);
+      } else {
+        const headerRow = document.createElement("tr");
+        headerRow.innerHTML =
+          `<th>Billing date</th><th class="num">Total</th>` +
+          games.map((g) => `<th class="num">${escapeHtml(g)}</th>`).join("");
+        dateTableHead.appendChild(headerRow);
+        dates.forEach((d) => {
+          const tr = document.createElement("tr");
+          let rowSum = 0;
+          const cells = games.map((g) => {
+            const v = byDateGame[d][g] || 0;
+            rowSum += v;
+            return `<td class="num">${v}</td>`;
+          });
+          tr.innerHTML =
+            `<td>${escapeHtml(d)}</td><td class="num"><strong>${rowSum}</strong></td>` + cells.join("");
+          dateTableBody.appendChild(tr);
+        });
+      }
+
+      const emptyBar = (msg) => ({
+        labels: [msg],
+        datasets: [
+          {
+            label: "Times exceeded",
+            data: [0],
+            backgroundColor: "rgba(139, 156, 179, 0.35)",
+            borderWidth: 0
+          }
+        ]
+      });
+
+      const ctx1 = document.getElementById("chart-game-type");
+      charts.push(
+        new Chart(ctx1, {
+          type: "bar",
+          data:
+            gameLabels.length > 0
+              ? {
+                  labels: gameLabels,
+                  datasets: [
+                    {
+                      label: "Times exceeded",
+                      data: gameData,
+                      backgroundColor: gameLabels.map((_, i) => hsl(i, gameLabels.length)),
+                      borderColor: "rgba(255,255,255,0.06)",
+                      borderWidth: 1
+                    }
+                  ]
+                }
+              : emptyBar("No exceedances in range"),
+          options: {
+            ...chartDefaults,
+            plugins: {
+              ...chartDefaults.plugins,
+              legend: { display: false }
+            }
+          }
+        })
+      );
+
+      const ctx2 = document.getElementById("chart-bet-area");
+      charts.push(
+        new Chart(ctx2, {
+          type: "bar",
+          data:
+            betLabels.length > 0
+              ? {
+                  labels: betLabels,
+                  datasets: [
+                    {
+                      label: "Times exceeded",
+                      data: betData,
+                      backgroundColor: betLabels.map((_, i) => hsl(i * 3, betLabels.length)),
+                      borderColor: "rgba(255,255,255,0.06)",
+                      borderWidth: 1
+                    }
+                  ]
+                }
+              : emptyBar("No exceedances in range"),
+          options: {
+            ...chartDefaults,
+            scales: {
+              ...chartDefaults.scales,
+              x: {
+                ...chartDefaults.scales.x,
+                ticks: {
+                  ...chartDefaults.scales.x.ticks,
+                  autoSkip: false,
+                  maxRotation: 90,
+                  minRotation: 45
+                }
+              }
+            },
+            layout: {
+              padding: { bottom: betLabels.length > 12 ? 24 : 8 }
+            },
+            plugins: {
+              ...chartDefaults.plugins,
+              legend: { display: false }
+            }
+          }
+        })
+      );
+
+      const datasets = games.map((g, idx) => ({
+        label: g,
+        data: dates.map((d) => (byDateGame[d][g] || 0)),
+        backgroundColor: hsl(idx, games.length),
+        borderColor: "rgba(0,0,0,0.2)",
+        borderWidth: 1
+      }));
+
+      const ctx3 = document.getElementById("chart-by-date");
+      charts.push(
+        new Chart(ctx3, {
+          type: "bar",
+          data:
+            dates.length > 0 && datasets.length > 0
+              ? { labels: dates, datasets }
+              : emptyBar("No exceedances in range"),
+          options: {
+            ...chartDefaults,
+            scales: {
+              ...chartDefaults.scales,
+              x: {
+                ...chartDefaults.scales.x,
+                stacked: dates.length > 0 && datasets.length > 0
+              },
+              y: {
+                ...chartDefaults.scales.y,
+                stacked: dates.length > 0 && datasets.length > 0
+              }
+            },
+            plugins: {
+              ...chartDefaults.plugins,
+              legend: {
+                display: dates.length > 0 && datasets.length > 0,
+                position: "right",
+                labels: {
+                  color: "#c8d4e6",
+                  boxWidth: 10,
+                  font: { size: 10 }
+                }
+              }
+            }
+          }
+        })
+      );
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement("div");
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function fillTwoColTable(tableId, colA, colB, labels, values) {
+      const thead = document.querySelector("#" + tableId + " thead");
+      const tbody = document.querySelector("#" + tableId + " tbody");
+      thead.innerHTML = `<tr><th>${escapeHtml(colA)}</th><th class="num">${escapeHtml(colB)}</th></tr>`;
+      tbody.innerHTML = labels
+        .map(
+          (lab, i) =>
+            `<tr><td>${escapeHtml(lab)}</td><td class="num">${values[i]}</td></tr>`
+        )
+        .join("");
+    }
+
+    function parseCsvRows(text) {
+      const parsed = Papa.parse(text, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false
+      });
+      if (parsed.errors && parsed.errors.length) {
+        console.warn(parsed.errors);
+      }
+      const rows = parsed.data.filter((r) => Object.keys(r).some((k) => r[k]));
+      if (!rows.length) {
+        throw new Error("No data rows found in CSV.");
+      }
+      const first = rows[0];
+      const need = ["billing_date", "game_type", "bet_place", "actual_probability", "threshold"];
+      const missing = need.filter((k) => !(k in first));
+      if (missing.length) {
+        throw new Error("Missing columns: " + missing.join(", "));
+      }
+      return rows;
+    }
+
+    function setDateFilterStatus(msg, isError) {
+      const el = document.getElementById("date-filter-status");
+      if (!el) return;
+      el.textContent = msg || "";
+      el.classList.toggle("error", !!isError);
+    }
+
+    function applyDateFilter() {
+      if (!loadedRows.length) return;
+      const fromEl = document.getElementById("date-from");
+      const toEl = document.getElementById("date-to");
+      const fromStr = fromEl ? fromEl.value : "";
+      const toStr = toEl ? toEl.value : "";
+      if (fromStr && toStr && fromStr > toStr) {
+        setDateFilterStatus("Start date must be on or before end date.", true);
+        return;
+      }
+      setDateFilterStatus("", false);
+      const filtered = filterRowsByDateRange(loadedRows, fromStr, toStr);
+      const result = processRows(filtered, loadedRows.length);
+      buildCharts(result);
+    }
+
+    function showError(msg) {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.classList.add("error");
+    }
+
+    function clearError() {
+      const el = document.getElementById("status");
+      el.textContent = "";
+      el.classList.remove("error");
+    }
+
+    function handleFile(file) {
+      clearError();
+      if (!file || !file.name.toLowerCase().endsWith(".csv")) {
+        showError("Please choose a .csv file.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          loadedRows = parseCsvRows(reader.result);
+          const extent = getBillingDateExtent(loadedRows);
+          fileDateMin = extent.min;
+          fileDateMax = extent.max;
+
+          const fromEl = document.getElementById("date-from");
+          const toEl = document.getElementById("date-to");
+          const hintEl = document.getElementById("date-range-available");
+
+          if (fileDateMin && fileDateMax) {
+            fromEl.min = fileDateMin;
+            fromEl.max = fileDateMax;
+            toEl.min = fileDateMin;
+            toEl.max = fileDateMax;
+            fromEl.value = fileDateMin;
+            toEl.value = fileDateMax;
+            hintEl.textContent = "Dates available in file: " + fileDateMin + " → " + fileDateMax + ".";
+          } else {
+            fromEl.removeAttribute("min");
+            fromEl.removeAttribute("max");
+            toEl.removeAttribute("min");
+            toEl.removeAttribute("max");
+            fromEl.value = "";
+            toEl.value = "";
+            hintEl.textContent =
+              "No YYYY-MM-DD billing dates found; narrow the range only if dates parse correctly.";
+          }
+
+          setDateFilterStatus("", false);
+          document.getElementById("dashboard").classList.remove("hidden");
+          applyDateFilter();
+          document.getElementById("status").textContent = "Loaded: " + file.name;
+        } catch (e) {
+          showError(e.message || String(e));
+          document.getElementById("dashboard").classList.add("hidden");
+          loadedRows = [];
+          fileDateMin = null;
+          fileDateMax = null;
+        }
+      };
+      reader.onerror = () => showError("Could not read file.");
+      reader.readAsText(file, "UTF-8");
+    }
+
+    const input = document.getElementById("file-input");
+    const dropzone = document.getElementById("dropzone");
+
+    function openFilePicker() {
+      input.click();
+    }
+
+    input.addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) handleFile(f);
+      e.target.value = "";
+    });
+
+    dropzone.addEventListener("click", (e) => {
+      if (e.target === input) return;
+      openFilePicker();
+    });
+
+    dropzone.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openFilePicker();
+      }
+    });
+
+    dropzone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      dropzone.classList.add("dragover");
+    });
+    dropzone.addEventListener("dragleave", (e) => {
+      if (!dropzone.contains(e.relatedTarget)) {
+        dropzone.classList.remove("dragover");
+      }
+    });
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) handleFile(f);
+    });
+
+    document.getElementById("date-from").addEventListener("change", applyDateFilter);
+    document.getElementById("date-to").addEventListener("change", applyDateFilter);
+    document.getElementById("date-reset").addEventListener("click", () => {
+      const fromEl = document.getElementById("date-from");
+      const toEl = document.getElementById("date-to");
+      if (fileDateMin && fileDateMax) {
+        fromEl.value = fileDateMin;
+        toEl.value = fileDateMax;
+      }
+      applyDateFilter();
+    });
+  </script>
+</body>
+</html>
