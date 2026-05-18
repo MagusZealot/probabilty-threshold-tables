@@ -217,6 +217,16 @@
       <div>Drop your CSV here or <strong>browse</strong></div>
       <div class="meta" style="margin-top: 0.5rem;">Required columns: billing_date, game_type, bet_place, actual_probability, threshold</div>
     </div>
+    <div style="margin-bottom: 1rem; display: grid; gap: 0.75rem;">
+      <label for="url-input" style="font-size: 0.875rem; color: var(--muted);">
+        Paste a public Google Sheet or CSV URL here
+      </label>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <input id="url-input" type="url" placeholder="https://docs.google.com/spreadsheets/d/..." style="flex:1 1 320px; min-width: 0; padding: 0.7rem 0.85rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text);" />
+        <button id="url-load" type="button" style="border-radius: 8px; border: 1px solid var(--border); background: #243044; color: var(--text); padding: 0.7rem 1rem; cursor: pointer;">Load from URL</button>
+      </div>
+      <div class="meta" style="margin-top: 0;">If the sheet is shared publicly, the app can fetch it as CSV. For best results, serve this page from a local web server (for example, http://localhost) instead of opening it via file://.</div>
+    </div>
     <div id="status"></div>
     <div id="dashboard" class="hidden">
       <div class="meta" id="file-meta"></div>
@@ -623,6 +633,20 @@
         .join("");
     }
 
+    function normalizeRows(rows) {
+      const filtered = rows.filter((r) => Object.keys(r).some((k) => r[k] !== null && r[k] !== undefined && String(r[k]).trim() !== ""));
+      if (!filtered.length) {
+        throw new Error("No data rows found in CSV.");
+      }
+      const first = filtered[0];
+      const need = ["billing_date", "game_type", "bet_place", "actual_probability", "threshold"];
+      const missing = need.filter((k) => !(k in first));
+      if (missing.length) {
+        throw new Error("Missing columns: " + missing.join(", "));
+      }
+      return filtered;
+    }
+
     function parseCsvRows(text) {
       const parsed = Papa.parse(text, {
         header: true,
@@ -632,17 +656,104 @@
       if (parsed.errors && parsed.errors.length) {
         console.warn(parsed.errors);
       }
-      const rows = parsed.data.filter((r) => Object.keys(r).some((k) => r[k]));
-      if (!rows.length) {
-        throw new Error("No data rows found in CSV.");
+      return normalizeRows(parsed.data);
+    }
+
+    function getGoogleSheetCsvUrl(value) {
+      try {
+        const url = new URL(String(value).trim());
+        if (!url.hostname.includes("docs.google.com")) {
+          return null;
+        }
+        const parts = url.pathname.split("/").filter(Boolean);
+        const dIndex = parts.indexOf("d");
+        if (dIndex < 0 || dIndex + 1 >= parts.length) {
+          return null;
+        }
+        const sheetId = parts[dIndex + 1];
+        let gid = "0";
+        if (url.hash) {
+          const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+          if (hashParams.has("gid")) {
+            gid = hashParams.get("gid");
+          }
+        }
+        if (url.searchParams.has("gid")) {
+          gid = url.searchParams.get("gid");
+        }
+        return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
+      } catch (error) {
+        return null;
       }
-      const first = rows[0];
-      const need = ["billing_date", "game_type", "bet_place", "actual_probability", "threshold"];
-      const missing = need.filter((k) => !(k in first));
-      if (missing.length) {
-        throw new Error("Missing columns: " + missing.join(", "));
+    }
+
+    async function loadCsvFromUrl(value) {
+      clearError();
+      const raw = String(value || "").trim();
+      const url = getGoogleSheetCsvUrl(raw) || raw;
+      if (!url) {
+        showError("Please enter a valid Google Sheet or CSV URL.");
+        return;
       }
-      return rows;
+      if (!/^https?:\/\//i.test(url)) {
+        showError("Please enter a valid HTTP or HTTPS URL.");
+        return;
+      }
+
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = "Fetching CSV from URL: " + url;
+      statusEl.classList.remove("error");
+
+      try {
+        const response = await fetch(url, { mode: "cors", redirect: "follow" });
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status} ${response.statusText}`);
+        }
+        const text = await response.text();
+        loadedRows = parseCsvRows(text);
+
+        const extent = getBillingDateExtent(loadedRows);
+        fileDateMin = extent.min;
+        fileDateMax = extent.max;
+
+        const fromEl = document.getElementById("date-from");
+        const toEl = document.getElementById("date-to");
+        const hintEl = document.getElementById("date-range-available");
+
+        if (fileDateMin && fileDateMax) {
+          fromEl.min = fileDateMin;
+          fromEl.max = fileDateMax;
+          toEl.min = fileDateMin;
+          toEl.max = fileDateMax;
+          fromEl.value = fileDateMin;
+          toEl.value = fileDateMax;
+          hintEl.textContent = "Dates available in file: " + fileDateMin + " → " + fileDateMax + ".";
+        } else {
+          fromEl.removeAttribute("min");
+          fromEl.removeAttribute("max");
+          toEl.removeAttribute("min");
+          toEl.removeAttribute("max");
+          fromEl.value = "";
+          toEl.value = "";
+          hintEl.textContent =
+            "No YYYY-MM-DD billing dates found; narrow the range only if dates parse correctly.";
+        }
+
+        setDateFilterStatus("", false);
+        document.getElementById("dashboard").classList.remove("hidden");
+        applyDateFilter();
+        statusEl.textContent = "Loaded: " + url;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        showError(
+          `Unable to load CSV from the provided URL. ${message}. ` +
+            "If this is a Google Sheet, make sure the sheet is shared publicly."
+        );
+        document.getElementById("dashboard").classList.add("hidden");
+        loadedRows = [];
+        fileDateMin = null;
+        fileDateMax = null;
+      }
     }
 
     function setDateFilterStatus(msg, isError) {
@@ -672,6 +783,7 @@
       const el = document.getElementById("status");
       el.textContent = msg;
       el.classList.add("error");
+      console.error(msg);
     }
 
     function clearError() {
@@ -735,6 +847,16 @@
 
     const input = document.getElementById("file-input");
     const dropzone = document.getElementById("dropzone");
+    const urlInput = document.getElementById("url-input");
+    const urlLoad = document.getElementById("url-load");
+
+    if (window.location.protocol === "file:") {
+      const statusEl = document.getElementById("status");
+      statusEl.textContent =
+        "CORS warning: this page is loaded from file://, which can block Google Sheets fetches. " +
+        "Run a local web server and open via http://localhost instead.";
+      statusEl.classList.remove("error");
+    }
 
     function openFilePicker() {
       input.click();
@@ -744,6 +866,16 @@
       const f = e.target.files && e.target.files[0];
       if (f) handleFile(f);
       e.target.value = "";
+    });
+
+    urlLoad.addEventListener("click", () => {
+      loadCsvFromUrl(urlInput.value);
+    });
+    urlInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        loadCsvFromUrl(urlInput.value);
+      }
     });
 
     dropzone.addEventListener("click", (e) => {
