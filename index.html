@@ -219,13 +219,39 @@
       color: var(--text);
       font: inherit;
     }
+    .calendar-month-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .calendar-month-controls button {
+      width: 2.1rem;
+      height: 2.1rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #243044;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    .calendar-month-controls button:hover:not(:disabled) {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .calendar-month-controls button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+    .calendar-month-controls select {
+      min-width: 160px;
+    }
     .calendar-summary {
       font-size: 0.8125rem;
       color: var(--muted);
     }
     .calendar-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-columns: minmax(280px, 1fr);
       gap: 1rem;
       margin-bottom: 1rem;
     }
@@ -237,8 +263,8 @@
     }
     .calendar-month h3 {
       margin: 0;
-      padding: 0.65rem 0.75rem;
-      font-size: 0.875rem;
+      padding: 0.8rem 1rem;
+      font-size: 1rem;
       font-weight: 600;
       background: #202b3b;
       border-bottom: 1px solid var(--border);
@@ -249,21 +275,22 @@
       grid-template-columns: repeat(7, minmax(0, 1fr));
     }
     .calendar-weekdays span {
-      padding: 0.45rem 0.25rem;
+      padding: 0.6rem 0.35rem;
       text-align: center;
-      font-size: 0.6875rem;
+      font-size: 0.75rem;
       color: var(--muted);
       border-bottom: 1px solid var(--border);
     }
     .calendar-day {
-      min-height: 42px;
-      padding: 0.35rem;
+      min-height: clamp(72px, 8vw, 112px);
+      padding: 0.55rem;
       border: 0;
       border-right: 1px solid rgba(45, 58, 79, 0.55);
       border-bottom: 1px solid rgba(45, 58, 79, 0.55);
       background: transparent;
       color: var(--muted);
       font: inherit;
+      font-size: 0.9375rem;
       text-align: left;
     }
     .calendar-day:nth-child(7n) { border-right: 0; }
@@ -275,9 +302,9 @@
     }
     .calendar-day-count {
       display: block;
-      margin-top: 0.15rem;
+      margin-top: 0.35rem;
       color: var(--accent);
-      font-size: 0.6875rem;
+      font-size: 0.8125rem;
       font-weight: 600;
     }
   </style>
@@ -356,6 +383,13 @@
           <label for="calendar-bet-area">Game / betting area
             <select id="calendar-bet-area"></select>
           </label>
+          <div class="calendar-month-controls" aria-label="Calendar month navigation">
+            <button type="button" id="calendar-prev-month" aria-label="Previous month">&lt;</button>
+            <label for="calendar-month">Month
+              <select id="calendar-month"></select>
+            </label>
+            <button type="button" id="calendar-next-month" aria-label="Next month">&gt;</button>
+          </div>
           <span class="calendar-summary" id="calendar-summary" aria-live="polite"></span>
         </div>
         <div class="calendar-grid" id="calendar-grid"></div>
@@ -452,6 +486,7 @@
     }
 
     let selectedCalendarBetAreaKey = "";
+    let selectedCalendarMonthKey = "";
 
     function hsl(i, total) {
       const h = Math.round((360 * i) / Math.max(total, 1)) % 360;
@@ -727,13 +762,27 @@
       };
     }
 
+    function getMonthKey(year, month) {
+      return `${year}-${String(month + 1).padStart(2, "0")}`;
+    }
+
+    function getMonthTitle(year, month) {
+      return new Date(year, month, 1).toLocaleDateString(undefined, {
+        month: "long",
+        year: "numeric"
+      });
+    }
+
     function buildCalendarView(exceededRows) {
       const select = document.getElementById("calendar-bet-area");
+      const monthSelect = document.getElementById("calendar-month");
+      const prevMonthButton = document.getElementById("calendar-prev-month");
+      const nextMonthButton = document.getElementById("calendar-next-month");
       const grid = document.getElementById("calendar-grid");
       const summary = document.getElementById("calendar-summary");
       const tableHead = document.querySelector("#table-calendar thead");
       const tableBody = document.querySelector("#table-calendar tbody");
-      if (!select || !grid || !summary || !tableHead || !tableBody) return;
+      if (!select || !monthSelect || !prevMonthButton || !nextMonthButton || !grid || !summary || !tableHead || !tableBody) return;
 
       const optionsByKey = new Map();
       for (const row of exceededRows) {
@@ -791,13 +840,54 @@
       const start = (fromEl && fromEl.value) || hitDates[0] || fileDateMin;
       const end = (toEl && toEl.value) || hitDates[hitDates.length - 1] || fileDateMax || start;
       if (!start || !end) {
+        monthSelect.innerHTML = "";
+        prevMonthButton.disabled = true;
+        nextMonthButton.disabled = true;
         grid.innerHTML = `<div class="note">No YYYY-MM-DD billing dates available for a calendar view.</div>`;
         return;
       }
 
       const months = getMonthsInRange(start, end);
-      for (const month of months) {
-        grid.appendChild(renderCalendarMonth(month.year, month.month, byDate));
+      const monthKeys = months.map((month) => month.key);
+      const firstHitMonthKey = hitDates.length ? hitDates[0].slice(0, 7) : "";
+      const defaultMonthKey = monthKeys.includes(firstHitMonthKey) ? firstHitMonthKey : (monthKeys[0] || "");
+      selectedCalendarMonthKey = monthKeys.includes(selectedCalendarMonthKey)
+        ? selectedCalendarMonthKey
+        : defaultMonthKey;
+
+      monthSelect.innerHTML = "";
+      months.forEach((month) => {
+        const option = document.createElement("option");
+        option.value = month.key;
+        option.textContent = getMonthTitle(month.year, month.month);
+        monthSelect.appendChild(option);
+      });
+      monthSelect.value = selectedCalendarMonthKey;
+
+      const selectedMonthIndex = monthKeys.indexOf(selectedCalendarMonthKey);
+      prevMonthButton.disabled = selectedMonthIndex <= 0;
+      nextMonthButton.disabled = selectedMonthIndex < 0 || selectedMonthIndex >= monthKeys.length - 1;
+
+      const monthHitDates = selectedCalendarMonthKey
+        ? hitDates.filter((date) => date.startsWith(selectedCalendarMonthKey))
+        : [];
+      summary.textContent = selectedCalendarBetAreaKey
+        ? `${monthHitDates.length} day${monthHitDates.length === 1 ? "" : "s"} hit threshold in selected month`
+        : "No game and betting-area exceedances in this range";
+      tableBody.innerHTML = monthHitDates.length
+        ? monthHitDates
+            .map(
+              (date) =>
+                `<tr><td>${escapeHtml(date)}</td><td>${escapeHtml(selected.game)}</td><td>${escapeHtml(selected.bet)}</td><td class="num">${byDate[date]}</td></tr>`
+            )
+            .join("")
+        : `<tr><td colspan="4" class="num">No hit days for this game and betting area in the selected month</td></tr>`;
+
+      const selectedMonth = months[selectedMonthIndex] || months[0];
+      if (selectedMonth) {
+        grid.appendChild(renderCalendarMonth(selectedMonth.year, selectedMonth.month, byDate));
+      } else {
+        grid.innerHTML = `<div class="note">No month available for the selected date range.</div>`;
       }
     }
 
@@ -809,7 +899,9 @@
       const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
       const last = new Date(end.getFullYear(), end.getMonth(), 1);
       while (cursor <= last) {
-        months.push({ year: cursor.getFullYear(), month: cursor.getMonth() });
+        const year = cursor.getFullYear();
+        const month = cursor.getMonth();
+        months.push({ year, month, key: getMonthKey(year, month) });
         cursor.setMonth(cursor.getMonth() + 1);
       }
       return months;
@@ -818,10 +910,7 @@
     function renderCalendarMonth(year, month, byDate) {
       const monthEl = document.createElement("section");
       monthEl.className = "calendar-month";
-      const title = new Date(year, month, 1).toLocaleDateString(undefined, {
-        month: "long",
-        year: "numeric"
-      });
+      const title = getMonthTitle(year, month);
       monthEl.innerHTML =
         `<h3>${escapeHtml(title)}</h3>` +
         `<div class="calendar-weekdays"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>`;
@@ -1148,6 +1237,26 @@
     document.getElementById("calendar-bet-area").addEventListener("change", (e) => {
       selectedCalendarBetAreaKey = e.target.value;
       applyDateFilter();
+    });
+    document.getElementById("calendar-month").addEventListener("change", (e) => {
+      selectedCalendarMonthKey = e.target.value;
+      applyDateFilter();
+    });
+    document.getElementById("calendar-prev-month").addEventListener("click", () => {
+      const monthSelect = document.getElementById("calendar-month");
+      if (monthSelect.selectedIndex > 0) {
+        monthSelect.selectedIndex -= 1;
+        selectedCalendarMonthKey = monthSelect.value;
+        applyDateFilter();
+      }
+    });
+    document.getElementById("calendar-next-month").addEventListener("click", () => {
+      const monthSelect = document.getElementById("calendar-month");
+      if (monthSelect.selectedIndex >= 0 && monthSelect.selectedIndex < monthSelect.options.length - 1) {
+        monthSelect.selectedIndex += 1;
+        selectedCalendarMonthKey = monthSelect.value;
+        applyDateFilter();
+      }
     });
     document.getElementById("date-reset").addEventListener("click", () => {
       const fromEl = document.getElementById("date-from");
