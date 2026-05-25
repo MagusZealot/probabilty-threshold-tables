@@ -196,6 +196,90 @@
     }
     .date-filter-status { font-size: 0.8125rem; color: var(--muted); }
     .date-filter-status.error { color: #f87171; }
+    .calendar-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+      margin: 0 0 0.85rem;
+    }
+    .calendar-toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+    .calendar-toolbar select {
+      min-width: 220px;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    .calendar-summary {
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .calendar-month {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #141b26;
+    }
+    .calendar-month h3 {
+      margin: 0;
+      padding: 0.65rem 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      background: #202b3b;
+      border-bottom: 1px solid var(--border);
+    }
+    .calendar-weekdays,
+    .calendar-days {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+    }
+    .calendar-weekdays span {
+      padding: 0.45rem 0.25rem;
+      text-align: center;
+      font-size: 0.6875rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    .calendar-day {
+      min-height: 42px;
+      padding: 0.35rem;
+      border: 0;
+      border-right: 1px solid rgba(45, 58, 79, 0.55);
+      border-bottom: 1px solid rgba(45, 58, 79, 0.55);
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      text-align: left;
+    }
+    .calendar-day:nth-child(7n) { border-right: 0; }
+    .calendar-day.empty { background: rgba(15, 20, 25, 0.45); }
+    .calendar-day.hit {
+      background: rgba(77, 163, 255, 0.18);
+      color: var(--text);
+      box-shadow: inset 0 0 0 1px rgba(77, 163, 255, 0.55);
+    }
+    .calendar-day-count {
+      display: block;
+      margin-top: 0.15rem;
+      color: var(--accent);
+      font-size: 0.6875rem;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
@@ -263,6 +347,20 @@
         <div class="chart-wrap tall"><canvas id="chart-by-date"></canvas></div>
         <h3 class="table-title">Counts by billing date and game type</h3>
         <div class="table-scroll"><table class="data" id="table-by-date"><thead></thead><tbody></tbody></table></div>
+      </section>
+
+      <section class="chart-card">
+        <h2>Calendar view by betting area</h2>
+        <p class="chart-date-range" id="chart-range-calendar"></p>
+        <div class="calendar-toolbar">
+          <label for="calendar-bet-area">Game / betting area
+            <select id="calendar-bet-area"></select>
+          </label>
+          <span class="calendar-summary" id="calendar-summary" aria-live="polite"></span>
+        </div>
+        <div class="calendar-grid" id="calendar-grid"></div>
+        <h3 class="table-title">Hit days for selected game and betting area</h3>
+        <div class="table-scroll"><table class="data" id="table-calendar"><thead></thead><tbody></tbody></table></div>
       </section>
     </div>
   </main>
@@ -353,6 +451,8 @@
       charts = [];
     }
 
+    let selectedCalendarBetAreaKey = "";
+
     function hsl(i, total) {
       const h = Math.round((360 * i) / Math.max(total, 1)) % 360;
       return `hsla(${h}, 65%, 55%, 0.85)`;
@@ -384,7 +484,7 @@
 
     function updateChartDateRangeCaptions() {
       const text = getChartDateRangeCaption();
-      ["chart-range-game-type", "chart-range-bet-area", "chart-range-by-date"].forEach((id) => {
+      ["chart-range-game-type", "chart-range-bet-area", "chart-range-by-date", "chart-range-calendar"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.textContent = text;
       });
@@ -451,6 +551,7 @@
       /* Tables first: Chart.js can throw on empty labels/datasets and would skip table updates. */
       fillTwoColTable("table-game-type", "Game type", "Times exceeded", gameLabels, gameData);
       fillTwoColTable("table-bet-area", "Betting area (bet_place)", "Times exceeded", betLabels, betData);
+      buildCalendarView(result.exceeded);
 
       const dateTableHead = document.querySelector("#table-by-date thead");
       const dateTableBody = document.querySelector("#table-by-date tbody");
@@ -612,6 +713,142 @@
           }
         })
       );
+    }
+
+    function getGameBetKey(game, bet) {
+      return `${game}\u001f${bet}`;
+    }
+
+    function splitGameBetKey(key) {
+      const parts = String(key || "").split("\u001f");
+      return {
+        game: parts[0] || "",
+        bet: parts.slice(1).join("\u001f") || ""
+      };
+    }
+
+    function buildCalendarView(exceededRows) {
+      const select = document.getElementById("calendar-bet-area");
+      const grid = document.getElementById("calendar-grid");
+      const summary = document.getElementById("calendar-summary");
+      const tableHead = document.querySelector("#table-calendar thead");
+      const tableBody = document.querySelector("#table-calendar tbody");
+      if (!select || !grid || !summary || !tableHead || !tableBody) return;
+
+      const optionsByKey = new Map();
+      for (const row of exceededRows) {
+        const game = (row.game_type || "").trim() || "(empty)";
+        const bet = (row.bet_place || "").trim() || "(empty)";
+        const key = getGameBetKey(game, bet);
+        if (!optionsByKey.has(key)) {
+          optionsByKey.set(key, { game, bet, label: `${game} / ${bet}` });
+        }
+      }
+      const options = Array.from(optionsByKey.values()).sort((a, b) =>
+        a.game.localeCompare(b.game) || a.bet.localeCompare(b.bet)
+      );
+      const optionKeys = options.map((option) => getGameBetKey(option.game, option.bet));
+      const current = selectedCalendarBetAreaKey || select.value || optionKeys[0] || "";
+      selectedCalendarBetAreaKey = optionKeys.includes(current) ? current : (optionKeys[0] || "");
+
+      select.innerHTML = "";
+      options.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = getGameBetKey(item.game, item.bet);
+        option.textContent = item.label;
+        select.appendChild(option);
+      });
+      select.value = selectedCalendarBetAreaKey;
+
+      const byDate = {};
+      const selected = splitGameBetKey(selectedCalendarBetAreaKey);
+      for (const row of exceededRows) {
+        const game = (row.game_type || "").trim() || "(empty)";
+        const bet = (row.bet_place || "").trim() || "(empty)";
+        const date = parseBillingDateKey(row.billing_date);
+        if (game !== selected.game || bet !== selected.bet || !date) continue;
+        byDate[date] = (byDate[date] || 0) + 1;
+      }
+
+      const hitDates = Object.keys(byDate).sort();
+      summary.textContent = selectedCalendarBetAreaKey
+        ? `${hitDates.length} day${hitDates.length === 1 ? "" : "s"} hit threshold`
+        : "No game and betting-area exceedances in this range";
+
+      tableHead.innerHTML = `<tr><th>Billing date</th><th>Game type</th><th>Betting area</th><th class="num">Times exceeded</th></tr>`;
+      tableBody.innerHTML = hitDates.length
+        ? hitDates
+            .map(
+              (date) =>
+                `<tr><td>${escapeHtml(date)}</td><td>${escapeHtml(selected.game)}</td><td>${escapeHtml(selected.bet)}</td><td class="num">${byDate[date]}</td></tr>`
+            )
+            .join("")
+        : `<tr><td colspan="4" class="num">No hit days for this game and betting area in this range</td></tr>`;
+
+      grid.innerHTML = "";
+      const fromEl = document.getElementById("date-from");
+      const toEl = document.getElementById("date-to");
+      const start = (fromEl && fromEl.value) || hitDates[0] || fileDateMin;
+      const end = (toEl && toEl.value) || hitDates[hitDates.length - 1] || fileDateMax || start;
+      if (!start || !end) {
+        grid.innerHTML = `<div class="note">No YYYY-MM-DD billing dates available for a calendar view.</div>`;
+        return;
+      }
+
+      const months = getMonthsInRange(start, end);
+      for (const month of months) {
+        grid.appendChild(renderCalendarMonth(month.year, month.month, byDate));
+      }
+    }
+
+    function getMonthsInRange(startStr, endStr) {
+      const start = new Date(startStr + "T00:00:00");
+      const end = new Date(endStr + "T00:00:00");
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return [];
+      const months = [];
+      const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+      const last = new Date(end.getFullYear(), end.getMonth(), 1);
+      while (cursor <= last) {
+        months.push({ year: cursor.getFullYear(), month: cursor.getMonth() });
+        cursor.setMonth(cursor.getMonth() + 1);
+      }
+      return months;
+    }
+
+    function renderCalendarMonth(year, month, byDate) {
+      const monthEl = document.createElement("section");
+      monthEl.className = "calendar-month";
+      const title = new Date(year, month, 1).toLocaleDateString(undefined, {
+        month: "long",
+        year: "numeric"
+      });
+      monthEl.innerHTML =
+        `<h3>${escapeHtml(title)}</h3>` +
+        `<div class="calendar-weekdays"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>`;
+
+      const daysEl = document.createElement("div");
+      daysEl.className = "calendar-days";
+      const firstDay = new Date(year, month, 1).getDay();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+      for (let i = 0; i < firstDay; i += 1) {
+        const empty = document.createElement("div");
+        empty.className = "calendar-day empty";
+        daysEl.appendChild(empty);
+      }
+
+      for (let day = 1; day <= daysInMonth; day += 1) {
+        const date = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        const count = byDate[date] || 0;
+        const dayEl = document.createElement("div");
+        dayEl.className = "calendar-day" + (count ? " hit" : "");
+        dayEl.title = count ? `${date}: ${count} threshold exceedance${count === 1 ? "" : "s"}` : date;
+        dayEl.innerHTML = `<span>${day}</span>` + (count ? `<span class="calendar-day-count">${count}</span>` : "");
+        daysEl.appendChild(dayEl);
+      }
+
+      monthEl.appendChild(daysEl);
+      return monthEl;
     }
 
     function escapeHtml(s) {
@@ -908,6 +1145,10 @@
 
     document.getElementById("date-from").addEventListener("change", applyDateFilter);
     document.getElementById("date-to").addEventListener("change", applyDateFilter);
+    document.getElementById("calendar-bet-area").addEventListener("change", (e) => {
+      selectedCalendarBetAreaKey = e.target.value;
+      applyDateFilter();
+    });
     document.getElementById("date-reset").addEventListener("click", () => {
       const fromEl = document.getElementById("date-from");
       const toEl = document.getElementById("date-to");
