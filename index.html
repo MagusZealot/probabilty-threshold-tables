@@ -326,7 +326,7 @@
     >
       <input type="file" id="file-input" class="file-input-hidden" accept=".csv,text/csv" />
       <div>Drop your CSV here or <strong>browse</strong></div>
-      <div class="meta" style="margin-top: 0.5rem;">Required columns: billing_date, game_type, bet_place, actual_probability, threshold</div>
+      <div class="meta" style="margin-top: 0.5rem;">Required columns: billing_date, game_type, bet_place, actual_probability, threshold, expected_he, actual_he</div>
     </div>
     <div style="margin-bottom: 1rem; display: grid; gap: 0.75rem;">
       <label for="url-input" style="font-size: 0.875rem; color: var(--muted);">
@@ -341,8 +341,30 @@
     <div id="dashboard" class="hidden">
       <div class="meta" id="file-meta"></div>
 
+      <section class="chart-card">
+        <h2>Automated data analysis</h2>
+        <p class="note" id="analysis-summary">Analysis will appear here once a CSV is loaded.</p>
+        <div id="analysis-guidance"></div>
+        <p class="note" style="margin-top: 0.5rem;">
+          <strong>Severity calculation:</strong> +2 for threshold deviation, +2 for very high/low actual HE, +1 for higher/lower actual HE, +1 if flagged as Issue, and +1 when expected_he differs from actual_he.
+        </p>
+        <p class="note" style="margin-top: 0.35rem;">
+          <strong>Date filter:</strong> use the billing date range controls below to restrict the analysis and top suspicious rows to a specific date range.
+        </p>
+        <p class="note" style="margin-top: 0.35rem;">
+          <strong>Recommendation:</strong> prioritize rows with the highest severity first, verify probability/threshold correlation for those bet_place rows, and confirm whether actual HE diverged from expected HE due to game or player behavior.
+        </p>
+        <div class="table-scroll hidden" id="analysis-table-wrapper">
+          <table class="data" id="table-analysis"><thead></thead><tbody></tbody></table>
+        </div>
+        <p class="note" id="analysis-top-rows-label" style="margin: 0.75rem 0 0.35rem;">Top 5 suspicious rows by severity</p>
+        <div class="table-scroll hidden" id="analysis-top-rows-wrapper" style="margin-top: 0.5rem;">
+          <table class="data" id="table-analysis-top-rows"><thead></thead><tbody></tbody></table>
+        </div>
+      </section>
+
       <div class="date-filter" id="date-filter-panel">
-        <span class="date-filter-label">Billing date range</span>
+        <span class="date-filter-label">Billing date range for charts and analysis</span>
         <label for="date-from">From <input type="date" id="date-from" autocomplete="off" /></label>
         <label for="date-to">To <input type="date" id="date-to" autocomplete="off" /></label>
         <button type="button" id="date-reset">Use full range in file</button>
@@ -463,10 +485,219 @@
       return { min: keys[0], max: keys[keys.length - 1] };
     }
 
-    /**
-     * Keeps rows whose billing_date is YYYY-MM-DD within [fromStr, toStr] inclusive.
-     * Empty from/to means no bound on that side. Both empty = all rows.
-     */
+    function getOptionalValue(row, names) {
+      for (const name of names) {
+        if (name in row && row[name] != null && String(row[name]).trim() !== "") {
+          return String(row[name]).trim();
+        }
+      }
+      return "";
+    }
+
+    function normalizeHeCategory(value) {
+      const s = String(value || "").trim().toLowerCase();
+      if (!s) return "Unknown";
+      if (s.includes("very high") || s.includes("veryhigh")) return "Very High";
+      if (s.includes("very low") || s.includes("verylow")) return "Very Low";
+      if (s.includes("higher")) return "Higher";
+      if (s.includes("lower")) return "Lower";
+      if (s.includes("normal")) return "Normal";
+      return "Unknown";
+    }
+
+    function normalizeStatus(value) {
+      const s = String(value || "").trim().toLowerCase();
+      if (!s) return "Unknown";
+      if (/issue/.test(s)) return "Issue";
+      if (/normal/.test(s)) return "Normal";
+      return "Unknown";
+    }
+
+    function getThresholdRelation(row) {
+      const actual = parsePct(row.actual_probability);
+      const threshold = parsePct(row.threshold);
+      if (actual === null || threshold === null) return "Unknown";
+      if (actual > threshold) return "Higher than Threshold";
+      if (actual < threshold) return "Lower than Threshold";
+      return "Within Threshold";
+    }
+
+    function getExpectedHe(row) {
+      return getOptionalValue(row, ["expected_he", "expectedHe", "Expected_he", "expected_HE"]);
+    }
+
+    function getActualHe(row) {
+      return getOptionalValue(row, ["actual_he", "actualHe", "Actual_he", "actual_HE"]);
+    }
+
+    function inferRowIssue(row) {
+      const explicitStatus = normalizeStatus(getOptionalValue(row, ["Status", "status"]));
+      const relation = getThresholdRelation(row);
+      const actualHeCategory = normalizeHeCategory(getActualHe(row));
+      if (explicitStatus === "Normal" || explicitStatus === "Issue") {
+        return { relation, actualHeCategory, status: explicitStatus };
+      }
+      if (relation !== "Within Threshold") {
+        return { relation, actualHeCategory, status: "Issue" };
+      }
+      return { relation, actualHeCategory, status: actualHeCategory === "Normal" ? "Normal" : "Issue" };
+    }
+
+    function getRowSeverity(row) {
+      let score = 0;
+      if (row.relation === "Higher than Threshold" || row.relation === "Lower than Threshold") {
+        score += 2;
+      }
+      if (row.actualHeCategory === "Very High" || row.actualHeCategory === "Very Low") {
+        score += 2;
+      } else if (row.actualHeCategory === "Higher" || row.actualHeCategory === "Lower") {
+        score += 1;
+      }
+      if (row.status === "Issue") {
+        score += 1;
+      }
+      if (row.expectedHe && row.actualHe && row.expectedHe !== row.actualHe) {
+        score += 1;
+      }
+      return score;
+    }
+
+    function getAnalysisRows(rows) {
+      return rows.map((row) => {
+        const relation = getThresholdRelation(row);
+        const expectedHe = getExpectedHe(row);
+        const actualHe = getActualHe(row);
+        const actualHeCategory = normalizeHeCategory(actualHe);
+        const status = inferRowIssue(row).status;
+        const actionNotes = [];
+
+        if (relation === "Higher than Threshold") {
+          actionNotes.push("Probability is higher than threshold; review player behavior and bet_place correlation.");
+        } else if (relation === "Lower than Threshold") {
+          actionNotes.push("Probability is lower than threshold; validate game logic and player outcomes.");
+        } else if (relation === "Within Threshold") {
+          actionNotes.push("Within threshold: check actual HE and in-game pair correlation when an issue is suspected.");
+        }
+
+        if (actualHeCategory === "Higher" || actualHeCategory === "Very High") {
+          actionNotes.push("Potential game issue if probability and actual HE are not mutually exclusive.");
+        } else if (actualHeCategory === "Lower" || actualHeCategory === "Very Low") {
+          actionNotes.push("Low actual HE suggests issue game analysis and big-win behavior review.");
+        }
+
+        if (expectedHe && actualHe && expectedHe !== actualHe) {
+          actionNotes.push("The actual HE differs from the expected HE; investigate why actual behavior deviated from the standard.");
+        }
+
+        actionNotes.push("Verify probability/threshold correlation for the in-game pair bet_place.");
+        actionNotes.push("Confirm game normality through game analysis.");
+        if (relation !== "Within Threshold") {
+          actionNotes.push("Review player behavior for rows with significant threshold deviation.");
+        }
+
+        return {
+          ...row,
+          relation,
+          expectedHe,
+          actualHe,
+          actualHeCategory,
+          status,
+          severity: getRowSeverity({ relation, actualHeCategory, status, expectedHe, actualHe }),
+          actionNotes: Array.from(new Set(actionNotes)).join(" ")
+        };
+      });
+    }
+
+    function buildAnalysisSummary(rows, result) {
+      const summaryEl = document.getElementById("analysis-summary");
+      const guidanceEl = document.getElementById("analysis-guidance");
+      const tableWrapper = document.getElementById("analysis-table-wrapper");
+      const analysisRows = getAnalysisRows(rows);
+      const issueRows = analysisRows.filter((r) => r.status === "Issue");
+      const counts = analysisRows.reduce(
+        (acc, row) => {
+          acc.relation[row.relation] = (acc.relation[row.relation] || 0) + 1;
+          acc.he[row.actualHeCategory] = (acc.he[row.actualHeCategory] || 0) + 1;
+          acc.status[row.status] = (acc.status[row.status] || 0) + 1;
+          return acc;
+        },
+        { relation: {}, he: {}, status: {} }
+      );
+
+      summaryEl.innerHTML = `
+        <strong>Summary:</strong> ${rows.length} selected rows, ${result.exceeded.length} threshold exceedances, ${issueRows.length} issue-like rows.
+      `;
+
+      guidanceEl.innerHTML = `
+        <ul>
+          <li>Verify probability and threshold correlation for each in-game pair <code>bet_place</code>.</li>
+          <li>Rows with abnormal actual HE or threshold deviations should trigger game analysis.</li>
+          <li>Rows above threshold merit player behavior review; rows below threshold may also indicate game or player issues.</li>
+        </ul>
+      `;
+
+      if (analysisRows.some((r) => r.actualHe || r.expectedHe || r.status)) {
+        tableWrapper.classList.remove("hidden");
+        const table = document.getElementById("table-analysis");
+        table.querySelector("thead").innerHTML = `
+          <tr><th>Analysis summary</th><th class="num">Count</th></tr>
+        `;
+        const body = table.querySelector("tbody");
+        const rowsHtml = [
+          `<tr><td>Within Threshold</td><td class="num">${counts.relation["Within Threshold"] || 0}</td></tr>`,
+          `<tr><td>Higher than Threshold</td><td class="num">${counts.relation["Higher than Threshold"] || 0}</td></tr>`,
+          `<tr><td>Lower than Threshold</td><td class="num">${counts.relation["Lower than Threshold"] || 0}</td></tr>`,
+          `<tr><td>Actual HE Normal</td><td class="num">${counts.he["Normal"] || 0}</td></tr>`,
+          `<tr><td>Actual HE Higher / Very High</td><td class="num">${(counts.he["Higher"] || 0) + (counts.he["Very High"] || 0)}</td></tr>`,
+          `<tr><td>Actual HE Lower / Very Low</td><td class="num">${(counts.he["Lower"] || 0) + (counts.he["Very Low"] || 0)}</td></tr>`,
+          `<tr><td>Issue status</td><td class="num">${counts.status["Issue"] || 0}</td></tr>`,
+          `<tr><td>Normal status</td><td class="num">${counts.status["Normal"] || 0}</td></tr>`
+        ];
+        body.innerHTML = rowsHtml.join("");
+      } else {
+        tableWrapper.classList.add("hidden");
+      }
+
+      const topRows = issueRows
+        .slice()
+        .sort((a, b) => b.severity - a.severity)
+        .slice(0, 5);
+      const topWrapper = document.getElementById("analysis-top-rows-wrapper");
+      const topTable = document.getElementById("table-analysis-top-rows");
+
+      if (topRows.length) {
+        topWrapper.classList.remove("hidden");
+        topTable.querySelector("thead").innerHTML = `
+          <tr>
+            <th>Billing date</th>
+            <th>Game type</th>
+            <th>Bet place</th>
+            <th>Relation</th>
+            <th>Expected HE</th>
+            <th>Actual HE</th>
+            <th>Status</th>
+            <th class="num">Severity</th>
+          </tr>
+        `;
+        topTable.querySelector("tbody").innerHTML = topRows
+          .map(
+            (row) =>
+              `<tr>` +
+              `<td>${escapeHtml(getOptionalValue(row, ["billing_date"]))}</td>` +
+              `<td>${escapeHtml(getOptionalValue(row, ["game_type"]))}</td>` +
+              `<td>${escapeHtml(getOptionalValue(row, ["bet_place"]))}</td>` +
+              `<td>${escapeHtml(row.relation)}</td>` +
+              `<td>${escapeHtml(row.expectedHe)}</td>` +
+              `<td>${escapeHtml(row.actualHe)}</td>` +
+              `<td>${escapeHtml(row.status)}</td>` +
+              `<td class="num">${row.severity}</td>` +
+              `</tr>`
+          )
+          .join("");
+      } else {
+        topWrapper.classList.add("hidden");
+      }
+    }
     function filterRowsByDateRange(rows, fromStr, toStr) {
       const hasFrom = !!(fromStr && String(fromStr).trim());
       const hasTo = !!(toStr && String(toStr).trim());
@@ -557,7 +788,7 @@
       };
     }
 
-    function buildCharts(result) {
+    function buildCharts(result, rows) {
       destroyCharts();
       const { byGame, byBet, byDateGame, exceeded, totalRows } = result;
 
@@ -587,6 +818,7 @@
       fillTwoColTable("table-game-type", "Game type", "Times exceeded", gameLabels, gameData);
       fillTwoColTable("table-bet-area", "Betting area (bet_place)", "Times exceeded", betLabels, betData);
       buildCalendarView(result.exceeded);
+      buildAnalysisSummary(rows, result);
 
       const dateTableHead = document.querySelector("#table-by-date thead");
       const dateTableBody = document.querySelector("#table-by-date tbody");
@@ -1101,7 +1333,7 @@
       setDateFilterStatus("", false);
       const filtered = filterRowsByDateRange(loadedRows, fromStr, toStr);
       const result = processRows(filtered, loadedRows.length);
-      buildCharts(result);
+      buildCharts(result, filtered);
     }
 
     function showError(msg) {
