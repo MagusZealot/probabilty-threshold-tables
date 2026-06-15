@@ -15,6 +15,40 @@
       --muted: #8b9cb3;
       --accent: #4da3ff;
     }
+    html {
+      scroll-behavior: smooth;
+    }
+    .dashboard-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(26, 35, 50, 0.94);
+      border-bottom: 1px solid rgba(45, 58, 79, 0.85);
+      margin-bottom: 1rem;
+    }
+    .dashboard-nav a {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.55rem 0.85rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: #243044;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.875rem;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .dashboard-nav a:hover,
+    .dashboard-nav a:focus-visible {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #0f1419;
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -338,10 +372,17 @@
       </div>
     </div>
     <div id="status"></div>
+    <div class="dashboard-nav" aria-label="Dashboard navigation">
+      <a href="#analysis-section">Automated analysis</a>
+      <a href="#game-type-section">By game type</a>
+      <a href="#bet-area-section">By betting area</a>
+      <a href="#by-date-section">By billing date</a>
+      <a href="#calendar-section">Calendar view</a>
+    </div>
     <div id="dashboard" class="hidden">
       <div class="meta" id="file-meta"></div>
 
-      <section class="chart-card">
+      <section class="chart-card" id="analysis-section">
         <h2>Automated data analysis</h2>
         <p class="note" id="analysis-summary">Analysis will appear here once a CSV is loaded.</p>
         <div id="analysis-guidance"></div>
@@ -357,7 +398,7 @@
         <div class="table-scroll hidden" id="analysis-table-wrapper">
           <table class="data" id="table-analysis"><thead></thead><tbody></tbody></table>
         </div>
-        <p class="note" id="analysis-top-rows-label" style="margin: 0.75rem 0 0.35rem;">Top 5 suspicious rows by severity</p>
+        <p class="note" id="analysis-top-rows-label" style="margin: 0.75rem 0 0.35rem;">All suspicious rows sorted by severity</p>
         <div class="table-scroll hidden" id="analysis-top-rows-wrapper" style="margin-top: 0.5rem;">
           <table class="data" id="table-analysis-top-rows"><thead></thead><tbody></tbody></table>
         </div>
@@ -372,7 +413,7 @@
         <p class="date-hint" id="date-range-available"></p>
       </div>
 
-      <section class="chart-card">
+      <section class="chart-card" id="game-type-section">
         <h2>Number of times threshold exceeded by game type</h2>
         <p class="chart-date-range" id="chart-range-game-type"></p>
         <div class="chart-wrap"><canvas id="chart-game-type"></canvas></div>
@@ -381,7 +422,7 @@
         <div class="table-scroll"><table class="data" id="table-game-type"><thead></thead><tbody></tbody></table></div>
       </section>
 
-      <section class="chart-card">
+      <section class="chart-card" id="bet-area-section">
         <h2>Number of times threshold exceeded by betting area</h2>
         <p class="chart-date-range" id="chart-range-bet-area"></p>
         <p class="note" style="margin-bottom: 0.5rem;">Betting area uses column <code>bet_place</code> from the CSV.</p>
@@ -390,7 +431,7 @@
         <div class="table-scroll"><table class="data" id="table-bet-area"><thead></thead><tbody></tbody></table></div>
       </section>
 
-      <section class="chart-card">
+      <section class="chart-card" id="by-date-section">
         <h2>Number of times threshold exceeded by billing date (stacked by game type)</h2>
         <p class="chart-date-range" id="chart-range-by-date"></p>
         <div class="chart-wrap tall"><canvas id="chart-by-date"></canvas></div>
@@ -398,7 +439,7 @@
         <div class="table-scroll"><table class="data" id="table-by-date"><thead></thead><tbody></tbody></table></div>
       </section>
 
-      <section class="chart-card">
+      <section class="chart-card" id="calendar-section">
         <h2>Calendar view by betting area</h2>
         <p class="chart-date-range" id="chart-range-calendar"></p>
         <div class="calendar-toolbar">
@@ -658,10 +699,7 @@
         tableWrapper.classList.add("hidden");
       }
 
-      const topRows = issueRows
-        .slice()
-        .sort((a, b) => b.severity - a.severity)
-        .slice(0, 5);
+      const topRows = issueRows.slice().sort((a, b) => b.severity - a.severity);
       const topWrapper = document.getElementById("analysis-top-rows-wrapper");
       const topTable = document.getElementById("table-analysis-top-rows");
 
